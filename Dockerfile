@@ -25,7 +25,7 @@ RUN cd /tmp \
  && chown -R node:node /app/node_modules/tr46 \
  && rm tr46-0.0.3.tgz
 
-FROM node:24-bookworm AS openclaw-source
+FROM node:26-bookworm AS openclaw-source
 
 ARG OPENCLAW_GIT_REF=main
 
