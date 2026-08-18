@@ -1,0 +1,6 @@
+.DS_Store
+.env
+.env.*
+*.log
+openclaw-backup*.tar.gz
+data/

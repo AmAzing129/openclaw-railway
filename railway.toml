@@ -1,0 +1,12 @@
+[build]
+builder = "DOCKERFILE"
+
+[deploy]
+numReplicas = 1
+healthcheckPath = "/healthz"
+healthcheckTimeout = 300
+restartPolicyType = "ALWAYS"
+requiredMountPath = "/data"
+sleepApplication = false
+drainingSeconds = 15
+preDeployCommand = "node /usr/local/bin/openclaw-railway preflight"
