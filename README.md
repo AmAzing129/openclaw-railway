@@ -168,7 +168,7 @@ Replace `openclaw` with your service name if it is different. The archive can co
 
 ## Switch to another version
 
-- **Official image** (default): leave `OPENCLAW_IMAGE_TAG` unset to use the repository's tested tag. The current `latest` tag does not support automatic Owner pairing. To pin another version, set `OPENCLAW_IMAGE_TAG` to a [tagged OpenClaw image](https://github.com/orgs/openclaw/packages/container/openclaw/versions?filters%5Bversion_type%5D=tagged) such as `2026.8.1-beta.2` — the tag only, not a digest or architecture suffix.
+- **Official image** (default): leave `OPENCLAW_IMAGE_TAG` unset to use the repository's tested tag, currently `2026.8.1-beta.3`. The current stable `latest` tag does not support automatic Owner pairing. To pin another version, set `OPENCLAW_IMAGE_TAG` to a [tagged OpenClaw image](https://github.com/orgs/openclaw/packages/container/openclaw/versions?filters%5Bversion_type%5D=tagged) — the tag only, not a digest or architecture suffix.
 - **Build from source**: set `OPENCLAW_BUILD_MODE=source` and `OPENCLAW_GIT_REF=<commit-sha-or-branch>`. Source builds need more memory and time.
 
 Persistent data in `/data` survives image changes.

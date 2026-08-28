@@ -2,28 +2,12 @@
 
 ARG OPENCLAW_BUILD_MODE=image
 
-# TEMPORARY OPENCLAW COMPATIBILITY 1/2 — Owner bootstrap support.
-# The current `latest` image does not make
+# Pin the beta channel until a stable image makes
 # `openclaw dashboard --json` return the `browserUrl` required for automatic
-# Owner pairing. Once a stable image includes that contract, change this default
-# to `latest`; compatibility block 2/2 must be evaluated separately.
-ARG OPENCLAW_IMAGE_TAG=2026.8.1-beta.2
+# Owner pairing. 2026.8.1-beta.3 also fixes the official image's Telegram
+# dependency pruning, so no downstream package patch is required.
+ARG OPENCLAW_IMAGE_TAG=2026.8.1-beta.3
 FROM ghcr.io/openclaw/openclaw:${OPENCLAW_IMAGE_TAG} AS openclaw-image
-
-# TEMPORARY OPENCLAW COMPATIBILITY 2/2 — missing Telegram dependency.
-# 2026.8.1-beta.2's production prune leaves whatwg-url@5 without its declared
-# tr46 dependency, so the bundled Telegram plugin cannot register. Extract the
-# exact compatible package without running install against OpenClaw's workspace.
-# Delete this USER/RUN block after the selected official image can register the
-# Telegram plugin without `Cannot find module 'tr46'`.
-USER root
-
-RUN cd /tmp \
- && npm pack --ignore-scripts tr46@0.0.3 >/dev/null \
- && mkdir -p /app/node_modules/tr46 \
- && tar -xzf tr46-0.0.3.tgz --strip-components=1 -C /app/node_modules/tr46 \
- && chown -R node:node /app/node_modules/tr46 \
- && rm tr46-0.0.3.tgz
 
 FROM node:26-bookworm AS openclaw-source
 
