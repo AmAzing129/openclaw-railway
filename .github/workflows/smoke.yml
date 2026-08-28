@@ -40,7 +40,7 @@ jobs:
     runs-on: ubuntu-latest
     needs: test
     env:
-      DEFAULT_OPENCLAW_IMAGE_TAG: 2026.8.1-beta.2
+      DEFAULT_OPENCLAW_IMAGE_TAG: 2026.8.1-beta.3
     steps:
       - uses: actions/checkout@v7
       - name: Build selected OpenClaw version
@@ -98,7 +98,7 @@ jobs:
             docker logs "$container"
             exit 1
           fi
-          if ! docker logs "$container" 2>&1 | grep -E -q 'http server listening .*telegram'; then
+          if ! docker logs "$container" 2>&1 | grep -E 'http server listening .*telegram' >/dev/null; then
             echo "Telegram plugin did not register" >&2
             docker logs "$container"
             exit 1
