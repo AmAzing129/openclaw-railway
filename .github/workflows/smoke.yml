@@ -109,7 +109,7 @@ jobs:
             const fs = require("node:fs");
             const config = JSON.parse(fs.readFileSync("/data/.openclaw/openclaw.json", "utf8"));
             if (config.gateway.mode !== "local" || config.gateway.bind !== "lan") process.exit(1);
-            if (!["100.64.0.3", "100.64.0.5"].every((proxy) => config.gateway.trustedProxies.includes(proxy))) process.exit(1);
+            if (!["100.64.0.3", "100.64.0.4", "100.64.0.5"].every((proxy) => config.gateway.trustedProxies.includes(proxy))) process.exit(1);
             if (Object.hasOwn(config.gateway.controlUi, "basePath")) process.exit(1);
             if (!config.gateway.controlUi.allowedOrigins.includes("https://claw-smoke.up.railway.app")) process.exit(1);
             if (!config.gateway.controlUi.allowedOrigins.includes("https://claw.example.com")) process.exit(1);

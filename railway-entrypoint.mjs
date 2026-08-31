@@ -294,9 +294,9 @@ export function mergeOpenClawConfig(config, { origins, workspaceDir, telegramAll
     }
   }
   const trustedProxies = [...(existingTrustedProxies ?? [])];
-  // Railway Hikari alternates between these rolling-deployment peers. Trust
-  // only those observed peers rather than Railway's full 100.64.0.0/10 range.
-  for (const proxy of ["100.64.0.3", "100.64.0.5"]) {
+  // Railway Hikari reaches services through these immediate peers. Trust only
+  // the observed addresses rather than Railway's full 100.64.0.0/10 range.
+  for (const proxy of ["100.64.0.3", "100.64.0.4", "100.64.0.5"]) {
     if (!trustedProxies.includes(proxy)) {
       trustedProxies.push(proxy);
     }

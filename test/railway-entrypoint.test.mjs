@@ -44,7 +44,12 @@ test("merges Railway settings without replacing user configuration", () => {
   assert.equal(result.agents.defaults.workspace, "/data/workspace");
   assert.equal(result.gateway.mode, "local");
   assert.equal(result.gateway.bind, "lan");
-  assert.deepEqual(result.gateway.trustedProxies, ["127.0.0.1", "100.64.0.3", "100.64.0.5"]);
+  assert.deepEqual(result.gateway.trustedProxies, [
+    "127.0.0.1",
+    "100.64.0.3",
+    "100.64.0.4",
+    "100.64.0.5",
+  ]);
   assert.equal(result.gateway.controlUi.enabled, true);
   assert.equal(Object.hasOwn(result.gateway.controlUi, "basePath"), false);
   assert.deepEqual(result.gateway.controlUi.allowedOrigins, [
@@ -186,7 +191,7 @@ test("atomically updates a config once and does not churn an unchanged file", as
     const saved = JSON.parse(firstWrite);
     assert.equal(saved.channels.telegram.enabled, true);
     assert.deepEqual(saved.gateway.controlUi.allowedOrigins, ["https://claw.up.railway.app"]);
-    assert.deepEqual(saved.gateway.trustedProxies, ["100.64.0.3", "100.64.0.5"]);
+    assert.deepEqual(saved.gateway.trustedProxies, ["100.64.0.3", "100.64.0.4", "100.64.0.5"]);
   } finally {
     await rm(directory, { recursive: true, force: true });
   }
