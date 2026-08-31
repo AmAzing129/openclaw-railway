@@ -2,11 +2,9 @@
 
 ARG OPENCLAW_BUILD_MODE=image
 
-# Pin the beta channel until a stable image makes
-# `openclaw dashboard --json` return the `browserUrl` required for automatic
-# Owner pairing. 2026.8.1-beta.3 also fixes the official image's Telegram
-# dependency pruning, so no downstream package patch is required.
-ARG OPENCLAW_IMAGE_TAG=2026.8.1-beta.3
+# Pin the repository's tested stable release instead of following the mutable
+# `latest` tag.
+ARG OPENCLAW_IMAGE_TAG=2026.8.1
 FROM ghcr.io/openclaw/openclaw:${OPENCLAW_IMAGE_TAG} AS openclaw-image
 
 FROM node:26-bookworm AS openclaw-source
@@ -51,6 +49,7 @@ ENV HOME=/home/node \
     OPENCLAW_STATE_DIR=/data/.openclaw \
     OPENCLAW_WORKSPACE_DIR=/data/workspace \
     OPENCLAW_CONFIG_PATH=/data/.openclaw/openclaw.json \
+    OPENCLAW_SUPERVISOR_MODE=external \
     OPENCLAW_DISABLE_BONJOUR=1 \
     NODE_OPTIONS=--max-old-space-size=1536
 

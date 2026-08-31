@@ -3,7 +3,7 @@ builder = "DOCKERFILE"
 
 [deploy]
 numReplicas = 1
-healthcheckPath = "/healthz"
+healthcheckPath = "/startupz"
 healthcheckTimeout = 300
 restartPolicyType = "ALWAYS"
 requiredMountPath = "/data"
