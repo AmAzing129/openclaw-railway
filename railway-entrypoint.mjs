@@ -35,6 +35,27 @@ const OPENCLAW_GID = 1000;
 const OWNERSHIP_MARKER = ".openclaw-railway-owned-v1";
 const CHILD_SHUTDOWN_TIMEOUT_MS = 10_000;
 
+/**
+ * TEMPORARY WEIXIN 2.4.6 COMPATIBILITY SHIM — remove after the plugin is fixed upstream.
+ *
+ * Tencent's Weixin 2.4.6 monitor retains the OpenClaw config captured when the account starts.
+ * OpenClaw 2026.8.1 can publish a newer in-memory config generation without restarting that
+ * monitor, then correctly rejects the stale config before model dispatch with
+ * PreparedModelCatalogConfigReplacedError. Before the Gateway starts, this shim patches only the
+ * known 2.4.6 runtime so each inbound message obtains getRuntimeConfig() at the message boundary.
+ * Exact version and source anchors are intentional: a different plugin build must not be modified
+ * speculatively in this general-purpose deployment image.
+ *
+ * Removal condition: the installed Weixin release obtains the current PluginRuntime config for
+ * every inbound message (or uses OpenClaw's newer inbound turn API). Then remove these constants,
+ * patchWeixinMonitorConfigLifecycle(), patchInstalledWeixinPlugins(), their start() call, and the
+ * corresponding tests.
+ */
+const WEIXIN_PLUGIN_NAME = "@tencent-weixin/openclaw-weixin";
+const WEIXIN_PLUGIN_VERSION = "2.4.6";
+const WEIXIN_CONFIG_PATCH_MARKER = "openclaw-railway: refresh config for each inbound message";
+const WEIXIN_MONITOR_PATH = path.join("dist", "src", "monitor", "monitor.js");
+
 function isRecord(value) {
   return value !== null && typeof value === "object" && !Array.isArray(value);
 }
@@ -446,6 +467,105 @@ async function pathExists(filePath) {
   }
 }
 
+export function patchWeixinMonitorConfigLifecycle(source) {
+  if (source.includes(WEIXIN_CONFIG_PATCH_MARKER)) {
+    return { changed: false, source };
+  }
+
+  const importAnchor = 'import { redactBody } from "../util/redact.js";';
+  const configAnchor = "                    config,\n                    channelRuntime,";
+  if (source.split(importAnchor).length !== 2 || source.split(configAnchor).length !== 2) {
+    throw new Error(
+      `Weixin ${WEIXIN_PLUGIN_VERSION} runtime does not match the expected compatibility patch anchors.`,
+    );
+  }
+
+  const patched = source
+    .replace(
+      importAnchor,
+      `${importAnchor}\nimport { getRuntimeConfig } from "openclaw/plugin-sdk/config-runtime"; // ${WEIXIN_CONFIG_PATCH_MARKER}`,
+    )
+    .replace(
+      configAnchor,
+      "                    config: getRuntimeConfig(),\n                    channelRuntime,",
+    );
+  return { changed: true, source: patched };
+}
+
+async function replaceFileAtomically(filePath, contents) {
+  const fileStat = await lstat(filePath);
+  if (!fileStat.isFile()) {
+    throw new Error(`Expected a regular file at ${filePath}.`);
+  }
+
+  const temporaryPath = `${filePath}.${process.pid}.${Date.now()}.tmp`;
+  let handle;
+  try {
+    handle = await open(temporaryPath, "wx", fileStat.mode & 0o777);
+    await handle.writeFile(contents, "utf8");
+    await handle.sync();
+    await handle.close();
+    handle = undefined;
+    if (typeof process.getuid === "function" && process.getuid() === 0) {
+      await chown(temporaryPath, fileStat.uid, fileStat.gid);
+    }
+    await rename(temporaryPath, filePath);
+    await chmod(filePath, fileStat.mode & 0o777);
+  } finally {
+    await handle?.close().catch(() => {});
+    await rm(temporaryPath, { force: true }).catch(() => {});
+  }
+}
+
+export async function patchInstalledWeixinPlugins(stateDir) {
+  const projectsDir = path.join(stateDir, "npm", "projects");
+  let projects;
+  try {
+    projects = await opendir(projectsDir);
+  } catch (error) {
+    if (error?.code === "ENOENT") {
+      return 0;
+    }
+    throw error;
+  }
+
+  let patchedCount = 0;
+  for await (const project of projects) {
+    if (!project.isDirectory()) {
+      continue;
+    }
+    const pluginRoot = path.join(
+      projectsDir,
+      project.name,
+      "node_modules",
+      "@tencent-weixin",
+      "openclaw-weixin",
+    );
+    let pluginPackage;
+    try {
+      pluginPackage = JSON.parse(await readFile(path.join(pluginRoot, "package.json"), "utf8"));
+    } catch (error) {
+      if (error?.code === "ENOENT" || error instanceof SyntaxError) {
+        continue;
+      }
+      throw error;
+    }
+    if (pluginPackage.name !== WEIXIN_PLUGIN_NAME || pluginPackage.version !== WEIXIN_PLUGIN_VERSION) {
+      continue;
+    }
+
+    const monitorPath = path.join(pluginRoot, WEIXIN_MONITOR_PATH);
+    const current = await readFile(monitorPath, "utf8");
+    const patched = patchWeixinMonitorConfigLifecycle(current);
+    if (!patched.changed) {
+      continue;
+    }
+    await replaceFileAtomically(monitorPath, patched.source);
+    patchedCount += 1;
+  }
+  return patchedCount;
+}
+
 async function chownTree(rootPath, uid, gid) {
   const rootStat = await lstat(rootPath);
   await lchown(rootPath, uid, gid);
@@ -753,6 +873,12 @@ async function start(env = process.env) {
   }
 
   await preparePersistentData(paths);
+  const patchedWeixinPlugins = await patchInstalledWeixinPlugins(paths.stateDir);
+  if (patchedWeixinPlugins > 0) {
+    console.error(
+      `[openclaw-railway] Patched ${patchedWeixinPlugins} Weixin plugin installation(s) to use the current OpenClaw config per message.`,
+    );
+  }
   const changed = await updateOpenClawConfig({
     configPath: paths.configPath,
     workspaceDir: paths.workspaceDir,

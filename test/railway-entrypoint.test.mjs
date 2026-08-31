@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import test from "node:test";
@@ -10,6 +10,8 @@ import {
   mergeOpenClawConfig,
   normalizeHttpsOrigin,
   ownerBootstrapUrlFromJson,
+  patchInstalledWeixinPlugins,
+  patchWeixinMonitorConfigLifecycle,
   readOpenClawConfig,
   resolveGatewayPort,
   resolveInternalGatewayPort,
@@ -197,6 +199,55 @@ test("atomically updates a config once and does not churn an unchanged file", as
     assert.equal(saved.gateway.allowRealIpFallback, false);
   } finally {
     await rm(directory, { recursive: true, force: true });
+  }
+});
+
+const weixinMonitorFixture = `import { redactBody } from "../util/redact.js";
+export async function monitorWeixinProvider(opts) {
+    const { config, channelRuntime } = opts;
+    await processOneMessage(full, {
+                    accountId,
+                    config,
+                    channelRuntime,
+    });
+}
+`;
+
+test("patches Weixin to resolve the current OpenClaw config for every message", () => {
+  const first = patchWeixinMonitorConfigLifecycle(weixinMonitorFixture);
+  assert.equal(first.changed, true);
+  assert.match(first.source, /getRuntimeConfig.*openclaw-railway: refresh config/);
+  assert.match(first.source, /config: getRuntimeConfig\(\),/);
+
+  const second = patchWeixinMonitorConfigLifecycle(first.source);
+  assert.equal(second.changed, false);
+  assert.equal(second.source, first.source);
+  assert.throws(
+    () => patchWeixinMonitorConfigLifecycle('import "unexpected-weixin-runtime";\n'),
+    /does not match the expected compatibility patch anchors/,
+  );
+});
+
+test("patches each installed Weixin 2.4.6 runtime atomically and idempotently", async () => {
+  const stateDir = await mkdtemp(path.join(tmpdir(), "openclaw-railway-weixin-"));
+  const pluginRoot = path.join(
+    stateDir,
+    "npm/projects/weixin-install/node_modules/@tencent-weixin/openclaw-weixin",
+  );
+  const monitorPath = path.join(pluginRoot, "dist/src/monitor/monitor.js");
+  try {
+    await mkdir(path.dirname(monitorPath), { recursive: true });
+    await writeFile(
+      path.join(pluginRoot, "package.json"),
+      JSON.stringify({ name: "@tencent-weixin/openclaw-weixin", version: "2.4.6" }),
+    );
+    await writeFile(monitorPath, weixinMonitorFixture);
+
+    assert.equal(await patchInstalledWeixinPlugins(stateDir), 1);
+    assert.match(await readFile(monitorPath, "utf8"), /config: getRuntimeConfig\(\),/);
+    assert.equal(await patchInstalledWeixinPlugins(stateDir), 0);
+  } finally {
+    await rm(stateDir, { recursive: true, force: true });
   }
 });
 
