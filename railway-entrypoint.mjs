@@ -293,13 +293,14 @@ export function mergeOpenClawConfig(config, { origins, workspaceDir, telegramAll
       allowedOrigins.push(origin);
     }
   }
-  const trustedProxies = [...(existingTrustedProxies ?? [])];
-  // Railway Hikari reaches services through these immediate peers. Trust only
-  // the observed addresses rather than Railway's full 100.64.0.0/10 range.
-  for (const proxy of ["100.64.0.3", "100.64.0.4", "100.64.0.5"]) {
-    if (!trustedProxies.includes(proxy)) {
-      trustedProxies.push(proxy);
-    }
+  const replacedRailwayProxies = new Set(["100.64.0.3", "100.64.0.4", "100.64.0.5"]);
+  const trustedProxies = (existingTrustedProxies ?? []).filter(
+    (proxy) => !replacedRailwayProxies.has(proxy),
+  );
+  // Railway Hikari peers varied from 100.64.0.3 through 100.64.0.6 in the
+  // same service subnet. Trust the smallest covering CIDR, not the full CGNAT range.
+  if (!trustedProxies.includes("100.64.0.0/29")) {
+    trustedProxies.push("100.64.0.0/29");
   }
 
   const nextControlUi = {
