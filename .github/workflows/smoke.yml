@@ -99,6 +99,25 @@ jobs:
             exit 1
           fi
           curl -fsS http://127.0.0.1:18080/healthz >/dev/null
+          curl -fsS \
+            -H 'X-Real-IP: 198.51.100.20' \
+            -H 'X-Forwarded-For: 127.0.0.1' \
+            -H 'Forwarded: for=127.0.0.1' \
+            -H 'Tailscale-User-Login: attacker@example.com' \
+            http://127.0.0.1:18080/ >/dev/null
+          curl -fsS \
+            -H 'X-Real-IP: 2001:db8::20' \
+            -H 'X-Forwarded-For: 127.0.0.1' \
+            http://127.0.0.1:18080/ >/dev/null
+          invalid_ip_status="$(curl -sS -o /dev/null -w '%{http_code}' \
+            -H 'X-Real-IP: not-an-ip' \
+            -H 'X-Forwarded-For: 198.51.100.20' \
+            -H 'Tailscale-User-Login: attacker@example.com' \
+            http://127.0.0.1:18080/)"
+          if [ "$invalid_ip_status" != 403 ]; then
+            echo "Expected malformed Railway client IP to be rejected, got HTTP $invalid_ip_status" >&2
+            exit 1
+          fi
           if ! docker logs "$container" 2>&1 | grep -E 'http server listening .*telegram' >/dev/null; then
             echo "Telegram plugin did not register" >&2
             docker logs "$container"
@@ -108,19 +127,9 @@ jobs:
           docker exec "$container" node -e '
             const fs = require("node:fs");
             const config = JSON.parse(fs.readFileSync("/data/.openclaw/openclaw.json", "utf8"));
-            if (config.gateway.mode !== "local" || config.gateway.bind !== "lan") process.exit(1);
-            for (const proxy of [
-              "100.64.0.3",
-              "100.64.0.4/30",
-              "100.64.0.8/29",
-              "100.64.0.16/28",
-              "100.64.0.32/27",
-              "100.64.0.64/26",
-              "100.64.0.128/25",
-            ])
-              if (!config.gateway.trustedProxies.includes(proxy)) process.exit(1);
-            if (config.gateway.trustedProxies.includes("100.64.0.0/29")) process.exit(1);
-            if (config.gateway.allowRealIpFallback !== true) process.exit(1);
+            if (config.gateway.mode !== "local" || config.gateway.bind !== "loopback") process.exit(1);
+            if (JSON.stringify(config.gateway.trustedProxies) !== JSON.stringify(["127.0.0.1"])) process.exit(1);
+            if (config.gateway.allowRealIpFallback !== false) process.exit(1);
             if (Object.hasOwn(config.gateway.controlUi, "basePath")) process.exit(1);
             if (!config.gateway.controlUi.allowedOrigins.includes("https://claw-smoke.up.railway.app")) process.exit(1);
             if (!config.gateway.controlUi.allowedOrigins.includes("https://claw.example.com")) process.exit(1);
@@ -130,10 +139,41 @@ jobs:
           docker exec "$container" sh -c \
             'ps -eo uid,gid,args | grep "[o]penclaw-gateway" | grep -q "^ *1000 *1000 "'
           docker exec "$container" sh -c \
+            'ps -eo uid,gid,args | grep "[c]addy run" | grep -q "^ *1000 *1000 "'
+          docker exec "$container" sh -c \
             'test "$OPENCLAW_SUPERVISOR_MODE" = external'
+          container_ip="$(docker inspect -f '{{range .NetworkSettings.Networks}}{{.IPAddress}}{{end}}' "$container")"
+          if docker exec "$container" node -e \
+            "fetch('http://$container_ip:18789/healthz').then(() => process.exit(0)).catch(() => process.exit(1))"; then
+            echo "Internal OpenClaw port is reachable outside loopback" >&2
+            exit 1
+          fi
+          docker exec -w /app "$container" node -e '
+            const WebSocket = require("ws");
+            const socket = new WebSocket("ws://127.0.0.1:8080/", {
+              headers: {
+                Origin: "https://claw-smoke.up.railway.app",
+                "X-Real-IP": "198.51.100.20",
+              },
+            });
+            const timeout = setTimeout(() => {
+              console.error("WebSocket proxy timed out");
+              process.exit(1);
+            }, 10_000);
+            socket.once("open", () => {
+              clearTimeout(timeout);
+              socket.close();
+            });
+            socket.once("close", () => process.exit(0));
+            socket.once("error", (error) => {
+              console.error(error);
+              process.exit(1);
+            });
+          '
 
           owner_url="$(docker exec "$container" openclaw-railway owner-url 2>/dev/null)"
           case "$owner_url" in
             https://claw.example.com/\#*) ;;
             *) echo "Unexpected owner URL: $owner_url" >&2; exit 1 ;;
           esac
+          docker exec "$container" openclaw dashboard --json --no-open | grep -q '"ok":true'

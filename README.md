@@ -17,6 +17,13 @@ Never commit tokens or API keys to your fork.
 
 Two ways to get the same result: a public domain and a healthy `/healthz`. Use the Railway dashboard, or clone your fork and let a coding agent follow the included skill.
 
+The container exposes only Caddy on port `8080`; OpenClaw listens on a loopback-only internal port.
+Caddy removes inbound proxy and Tailscale identity headers, rebuilds forwarding information from
+Railway's overwritten `X-Real-IP`, and then sends the normalized request to OpenClaw. Health checks
+without `X-Real-IP` use their direct connection address. This avoids depending on Railway's internal
+proxy IP ranges. It assumes public ingress overwrites `X-Real-IP` and that no untrusted sibling service
+can reach port `8080` directly over the Railway private network.
+
 ### Railway dashboard
 
 #### 1. Fork and import

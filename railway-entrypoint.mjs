@@ -22,14 +22,18 @@ import { pathToFileURL } from "node:url";
 
 const APP_DIR = "/app";
 const APP_ENTRYPOINT = path.join(APP_DIR, "openclaw.mjs");
+const CADDY_BIN = "/usr/local/bin/caddy";
+const CADDY_CONFIG = "/etc/caddy/Caddyfile";
 const DEFAULT_DATA_DIR = "/data";
 const DEFAULT_STATE_DIR = "/data/.openclaw";
 const DEFAULT_WORKSPACE_DIR = "/data/workspace";
 const DEFAULT_CONFIG_PATH = "/data/.openclaw/openclaw.json";
 const DEFAULT_GATEWAY_PORT = 8080;
+const DEFAULT_INTERNAL_GATEWAY_PORT = 18789;
 const OPENCLAW_UID = 1000;
 const OPENCLAW_GID = 1000;
 const OWNERSHIP_MARKER = ".openclaw-railway-owned-v1";
+const CHILD_SHUTDOWN_TIMEOUT_MS = 10_000;
 
 function isRecord(value) {
   return value !== null && typeof value === "object" && !Array.isArray(value);
@@ -91,6 +95,12 @@ export function resolveGatewayPort(env = process.env) {
     throw new Error("OPENCLAW_GATEWAY_PORT must be an integer between 1 and 65535.");
   }
   return port;
+}
+
+export function resolveInternalGatewayPort(publicPort) {
+  return publicPort === DEFAULT_INTERNAL_GATEWAY_PORT
+    ? DEFAULT_INTERNAL_GATEWAY_PORT + 1
+    : DEFAULT_INTERNAL_GATEWAY_PORT;
 }
 
 export function resolveTelegramAllowedUserIds(env = process.env) {
@@ -278,44 +288,12 @@ export function mergeOpenClawConfig(config, { origins, workspaceDir, telegramAll
   ) {
     throw new Error("OpenClaw config key gateway.controlUi.allowedOrigins must be a string array.");
   }
-  const existingTrustedProxies = gateway.trustedProxies;
-  if (
-    existingTrustedProxies !== undefined &&
-    (!Array.isArray(existingTrustedProxies) ||
-      existingTrustedProxies.some((proxy) => typeof proxy !== "string"))
-  ) {
-    throw new Error("OpenClaw config key gateway.trustedProxies must be a string array.");
-  }
 
   const allowedOrigins = [...(existingOrigins ?? [])];
   for (const origin of origins) {
     if (!allowedOrigins.includes(origin)) {
       allowedOrigins.push(origin);
     }
-  }
-  const railwayProxyRanges = [
-    "100.64.0.3",
-    "100.64.0.4/30",
-    "100.64.0.8/29",
-    "100.64.0.16/28",
-    "100.64.0.32/27",
-    "100.64.0.64/26",
-    "100.64.0.128/25",
-  ];
-  const replacedRailwayProxies = new Set([
-    "100.64.0.0/29",
-    "100.64.0.4",
-    "100.64.0.5",
-    "100.64.0.6",
-    ...railwayProxyRanges,
-  ]);
-  const trustedProxies = (existingTrustedProxies ?? []).filter(
-    (proxy) => !replacedRailwayProxies.has(proxy),
-  );
-  // Railway Hikari ingress peers use the service-local 100.64.0.x pool. The
-  // health checker uses .2 without forwarded headers, so exclude .0-.2 exactly.
-  for (const proxy of railwayProxyRanges) {
-    trustedProxies.push(proxy);
   }
 
   const nextControlUi = {
@@ -328,11 +306,9 @@ export function mergeOpenClawConfig(config, { origins, workspaceDir, telegramAll
   next.gateway = {
     ...gateway,
     mode: "local",
-    bind: "lan",
-    trustedProxies,
-    // Railway overwrites X-Real-IP, which safely attributes ingress requests
-    // whose entire X-Forwarded-For chain consists of trusted Hikari peers.
-    allowRealIpFallback: true,
+    bind: "loopback",
+    trustedProxies: ["127.0.0.1"],
+    allowRealIpFallback: false,
     controlUi: nextControlUi,
   };
   next.agents = {
@@ -560,17 +536,119 @@ async function spawnWithSignalForwarding(command, args, options) {
   process.exit(result.signal ? signalExitCode(result.signal) : (result.code ?? 1));
 }
 
+function spawnManagedChild(name, command, args, options) {
+  const child = spawn(command, args, options);
+  const result = new Promise((resolve) => {
+    child.once("error", (error) => resolve({ name, error }));
+    child.once("exit", (code, signal) => resolve({ name, code, signal }));
+  });
+  return { child, result };
+}
+
+async function terminateChild(child) {
+  if (child.pid === undefined || child.exitCode !== null || child.signalCode !== null) {
+    return;
+  }
+  const stoppedPromise = new Promise((resolve) => {
+    const onExit = () => {
+      clearTimeout(timeout);
+      resolve(true);
+    };
+    const timeout = setTimeout(() => {
+      child.off("exit", onExit);
+      resolve(false);
+    }, CHILD_SHUTDOWN_TIMEOUT_MS);
+    child.once("exit", onExit);
+  });
+  child.kill("SIGTERM");
+  const stopped = await stoppedPromise;
+  if (!stopped && child.exitCode === null && child.signalCode === null) {
+    child.kill("SIGKILL");
+  }
+}
+
+async function superviseGatewayAndProxy({ publicPort, internalPort, env }) {
+  dropPrivileges();
+  process.chdir(APP_DIR);
+
+  const gateway = spawnManagedChild(
+    "OpenClaw Gateway",
+    process.execPath,
+    [APP_ENTRYPOINT, "gateway", "--bind", "loopback", "--port", String(internalPort)],
+    {
+      cwd: APP_DIR,
+      env: { ...env, OPENCLAW_GATEWAY_PORT: String(internalPort) },
+      stdio: "inherit",
+    },
+  );
+  const proxy = spawnManagedChild(
+    "Caddy proxy",
+    CADDY_BIN,
+    ["run", "--config", CADDY_CONFIG, "--adapter", "caddyfile"],
+    {
+      cwd: APP_DIR,
+      env: {
+        ...env,
+        OPENCLAW_PROXY_PORT: String(publicPort),
+        OPENCLAW_INTERNAL_GATEWAY_PORT: String(internalPort),
+      },
+      stdio: "inherit",
+    },
+  );
+  const children = [gateway, proxy];
+  const signals = ["SIGHUP", "SIGINT", "SIGTERM"];
+  const handlers = new Map();
+  let forwardedSignal;
+  for (const signal of signals) {
+    const handler = () => {
+      forwardedSignal ??= signal;
+      for (const { child } of children) {
+        child.kill(signal);
+      }
+    };
+    handlers.set(signal, handler);
+    process.on(signal, handler);
+  }
+
+  console.error(
+    `[openclaw-railway] Proxy listening on ${publicPort}; OpenClaw listening on loopback ${internalPort}.`,
+  );
+  const result = await Promise.race(children.map(({ result: childResult }) => childResult));
+  for (const [signal, handler] of handlers) {
+    process.off(signal, handler);
+  }
+  await Promise.all(children.map(({ child }) => terminateChild(child)));
+
+  if (result.error) {
+    throw new Error(`${result.name} failed to start: ${result.error.message}`);
+  }
+  if (forwardedSignal) {
+    process.exit(signalExitCode(forwardedSignal));
+  }
+  if (result.signal) {
+    process.exit(signalExitCode(result.signal));
+  }
+  if (result.code === 0) {
+    throw new Error(`${result.name} exited unexpectedly.`);
+  }
+  process.exit(result.code ?? 1);
+}
+
 async function execOpenClaw(args, env = process.env) {
   dropPrivileges();
   process.chdir(APP_DIR);
+  const cliEnv = {
+    ...env,
+    OPENCLAW_GATEWAY_PORT: String(resolveInternalGatewayPort(resolveGatewayPort(env))),
+  };
   const execArgs = [process.execPath, APP_ENTRYPOINT, ...args];
   if (typeof process.execve === "function") {
-    process.execve(process.execPath, execArgs, env);
+    process.execve(process.execPath, execArgs, cliEnv);
     return;
   }
   await spawnWithSignalForwarding(process.execPath, execArgs.slice(1), {
     cwd: APP_DIR,
-    env,
+    env: cliEnv,
     stdio: "inherit",
   });
 }
@@ -597,7 +675,11 @@ async function printOwnerUrl(env = process.env) {
   const publicOrigin = origins[0];
   dropPrivileges();
 
-  const result = runOpenClaw(["dashboard", "--json", "--no-open"], env);
+  const internalPort = resolveInternalGatewayPort(resolveGatewayPort(env));
+  const result = runOpenClaw(["dashboard", "--json", "--no-open"], {
+    ...env,
+    OPENCLAW_GATEWAY_PORT: String(internalPort),
+  });
   if (result.status !== 0) {
     const detail = (result.stderr || result.stdout || "unknown OpenClaw error").trim();
     if (/does not recognize option|unknown option/i.test(detail)) {
@@ -681,8 +763,9 @@ async function start(env = process.env) {
     console.error("[openclaw-railway] OpenClaw configuration initialized or updated.");
   }
 
-  const port = resolveGatewayPort(env);
-  await execOpenClaw(["gateway", "--bind", "lan", "--port", String(port)], env);
+  const publicPort = resolveGatewayPort(env);
+  const internalPort = resolveInternalGatewayPort(publicPort);
+  await superviseGatewayAndProxy({ publicPort, internalPort, env });
 }
 
 export async function main(argv = process.argv.slice(2), env = process.env) {

@@ -12,6 +12,7 @@ import {
   ownerBootstrapUrlFromJson,
   readOpenClawConfig,
   resolveGatewayPort,
+  resolveInternalGatewayPort,
   resolvePublicOrigins,
   resolveTelegramAllowedUserIds,
   rewriteBootstrapUrl,
@@ -45,18 +46,9 @@ test("merges Railway settings without replacing user configuration", () => {
   assert.equal(result.agents.defaults.model, "example/model");
   assert.equal(result.agents.defaults.workspace, "/data/workspace");
   assert.equal(result.gateway.mode, "local");
-  assert.equal(result.gateway.bind, "lan");
-  assert.deepEqual(result.gateway.trustedProxies, [
-    "127.0.0.1",
-    "100.64.0.3",
-    "100.64.0.4/30",
-    "100.64.0.8/29",
-    "100.64.0.16/28",
-    "100.64.0.32/27",
-    "100.64.0.64/26",
-    "100.64.0.128/25",
-  ]);
-  assert.equal(result.gateway.allowRealIpFallback, true);
+  assert.equal(result.gateway.bind, "loopback");
+  assert.deepEqual(result.gateway.trustedProxies, ["127.0.0.1"]);
+  assert.equal(result.gateway.allowRealIpFallback, false);
   assert.equal(result.gateway.controlUi.enabled, true);
   assert.equal(Object.hasOwn(result.gateway.controlUi, "basePath"), false);
   assert.deepEqual(result.gateway.controlUi.allowedOrigins, [
@@ -115,6 +107,8 @@ test("validates and orders custom and generated public origins", () => {
 test("validates the gateway port", () => {
   assert.equal(resolveGatewayPort({}), 8080);
   assert.equal(resolveGatewayPort({ OPENCLAW_GATEWAY_PORT: "9090" }), 9090);
+  assert.equal(resolveInternalGatewayPort(8080), 18789);
+  assert.equal(resolveInternalGatewayPort(18789), 18790);
   assert.throws(() => resolveGatewayPort({ OPENCLAW_GATEWAY_PORT: "0" }), /between 1 and 65535/);
   assert.throws(() => resolveGatewayPort({ OPENCLAW_GATEWAY_PORT: "abc" }), /between 1 and 65535/);
 });
@@ -198,16 +192,9 @@ test("atomically updates a config once and does not churn an unchanged file", as
     const saved = JSON.parse(firstWrite);
     assert.equal(saved.channels.telegram.enabled, true);
     assert.deepEqual(saved.gateway.controlUi.allowedOrigins, ["https://claw.up.railway.app"]);
-    assert.deepEqual(saved.gateway.trustedProxies, [
-      "100.64.0.3",
-      "100.64.0.4/30",
-      "100.64.0.8/29",
-      "100.64.0.16/28",
-      "100.64.0.32/27",
-      "100.64.0.64/26",
-      "100.64.0.128/25",
-    ]);
-    assert.equal(saved.gateway.allowRealIpFallback, true);
+    assert.equal(saved.gateway.bind, "loopback");
+    assert.deepEqual(saved.gateway.trustedProxies, ["127.0.0.1"]);
+    assert.equal(saved.gateway.allowRealIpFallback, false);
   } finally {
     await rm(directory, { recursive: true, force: true });
   }
