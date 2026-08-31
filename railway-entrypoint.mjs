@@ -278,12 +278,26 @@ export function mergeOpenClawConfig(config, { origins, workspaceDir, telegramAll
   ) {
     throw new Error("OpenClaw config key gateway.controlUi.allowedOrigins must be a string array.");
   }
+  const existingTrustedProxies = gateway.trustedProxies;
+  if (
+    existingTrustedProxies !== undefined &&
+    (!Array.isArray(existingTrustedProxies) ||
+      existingTrustedProxies.some((proxy) => typeof proxy !== "string"))
+  ) {
+    throw new Error("OpenClaw config key gateway.trustedProxies must be a string array.");
+  }
 
   const allowedOrigins = [...(existingOrigins ?? [])];
   for (const origin of origins) {
     if (!allowedOrigins.includes(origin)) {
       allowedOrigins.push(origin);
     }
+  }
+  const trustedProxies = [...(existingTrustedProxies ?? [])];
+  // Railway Hikari uses this fixed immediate peer inside the service network.
+  // Trust that one peer rather than Railway's full 100.64.0.0/10 range.
+  if (!trustedProxies.includes("100.64.0.3")) {
+    trustedProxies.push("100.64.0.3");
   }
 
   const nextControlUi = {
@@ -297,6 +311,7 @@ export function mergeOpenClawConfig(config, { origins, workspaceDir, telegramAll
     ...gateway,
     mode: "local",
     bind: "lan",
+    trustedProxies,
     controlUi: nextControlUi,
   };
   next.agents = {
