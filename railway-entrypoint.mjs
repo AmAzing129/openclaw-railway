@@ -293,14 +293,29 @@ export function mergeOpenClawConfig(config, { origins, workspaceDir, telegramAll
       allowedOrigins.push(origin);
     }
   }
-  const replacedRailwayProxies = new Set(["100.64.0.3", "100.64.0.4", "100.64.0.5"]);
+  const railwayProxyRanges = [
+    "100.64.0.3",
+    "100.64.0.4/30",
+    "100.64.0.8/29",
+    "100.64.0.16/28",
+    "100.64.0.32/27",
+    "100.64.0.64/26",
+    "100.64.0.128/25",
+  ];
+  const replacedRailwayProxies = new Set([
+    "100.64.0.0/29",
+    "100.64.0.4",
+    "100.64.0.5",
+    "100.64.0.6",
+    ...railwayProxyRanges,
+  ]);
   const trustedProxies = (existingTrustedProxies ?? []).filter(
     (proxy) => !replacedRailwayProxies.has(proxy),
   );
-  // Railway Hikari peers varied from 100.64.0.3 through 100.64.0.6 in the
-  // same service subnet. Trust the smallest covering CIDR, not the full CGNAT range.
-  if (!trustedProxies.includes("100.64.0.0/29")) {
-    trustedProxies.push("100.64.0.0/29");
+  // Railway Hikari ingress peers use the service-local 100.64.0.x pool. The
+  // health checker uses .2 without forwarded headers, so exclude .0-.2 exactly.
+  for (const proxy of railwayProxyRanges) {
+    trustedProxies.push(proxy);
   }
 
   const nextControlUi = {
@@ -315,6 +330,9 @@ export function mergeOpenClawConfig(config, { origins, workspaceDir, telegramAll
     mode: "local",
     bind: "lan",
     trustedProxies,
+    // Railway overwrites X-Real-IP, which safely attributes ingress requests
+    // whose entire X-Forwarded-For chain consists of trusted Hikari peers.
+    allowRealIpFallback: true,
     controlUi: nextControlUi,
   };
   next.agents = {

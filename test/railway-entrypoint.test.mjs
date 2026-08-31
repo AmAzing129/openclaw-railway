@@ -24,6 +24,7 @@ test("merges Railway settings without replacing user configuration", () => {
     gateway: {
       auth: { mode: "token" },
       trustedProxies: ["127.0.0.1", "100.64.0.3"],
+      allowRealIpFallback: false,
       controlUi: {
         basePath: "/openclaw",
         allowedOrigins: ["https://existing.example"],
@@ -39,12 +40,23 @@ test("merges Railway settings without replacing user configuration", () => {
 
   assert.deepEqual(input.gateway.controlUi.allowedOrigins, ["https://existing.example"]);
   assert.deepEqual(input.gateway.trustedProxies, ["127.0.0.1", "100.64.0.3"]);
+  assert.equal(input.gateway.allowRealIpFallback, false);
   assert.equal(result.models.providers.example.baseUrl, "https://models.example");
   assert.equal(result.agents.defaults.model, "example/model");
   assert.equal(result.agents.defaults.workspace, "/data/workspace");
   assert.equal(result.gateway.mode, "local");
   assert.equal(result.gateway.bind, "lan");
-  assert.deepEqual(result.gateway.trustedProxies, ["127.0.0.1", "100.64.0.0/29"]);
+  assert.deepEqual(result.gateway.trustedProxies, [
+    "127.0.0.1",
+    "100.64.0.3",
+    "100.64.0.4/30",
+    "100.64.0.8/29",
+    "100.64.0.16/28",
+    "100.64.0.32/27",
+    "100.64.0.64/26",
+    "100.64.0.128/25",
+  ]);
+  assert.equal(result.gateway.allowRealIpFallback, true);
   assert.equal(result.gateway.controlUi.enabled, true);
   assert.equal(Object.hasOwn(result.gateway.controlUi, "basePath"), false);
   assert.deepEqual(result.gateway.controlUi.allowedOrigins, [
@@ -186,7 +198,16 @@ test("atomically updates a config once and does not churn an unchanged file", as
     const saved = JSON.parse(firstWrite);
     assert.equal(saved.channels.telegram.enabled, true);
     assert.deepEqual(saved.gateway.controlUi.allowedOrigins, ["https://claw.up.railway.app"]);
-    assert.deepEqual(saved.gateway.trustedProxies, ["100.64.0.0/29"]);
+    assert.deepEqual(saved.gateway.trustedProxies, [
+      "100.64.0.3",
+      "100.64.0.4/30",
+      "100.64.0.8/29",
+      "100.64.0.16/28",
+      "100.64.0.32/27",
+      "100.64.0.64/26",
+      "100.64.0.128/25",
+    ]);
+    assert.equal(saved.gateway.allowRealIpFallback, true);
   } finally {
     await rm(directory, { recursive: true, force: true });
   }
