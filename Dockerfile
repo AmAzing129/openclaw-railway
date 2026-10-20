@@ -6,7 +6,7 @@ ARG OPENCLAW_BUILD_MODE=image
 # `latest` tag.
 ARG OPENCLAW_IMAGE_TAG=2026.8.1
 
-FROM caddy:2.11.4 AS caddy-binary
+FROM caddy:2.11.7 AS caddy-binary
 
 FROM ghcr.io/openclaw/openclaw:${OPENCLAW_IMAGE_TAG} AS openclaw-image
 
